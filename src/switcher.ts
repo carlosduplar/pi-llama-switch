@@ -90,7 +90,7 @@ export function findLlamaServerPid(port: number): number | null {
   }
 }
 
-export async function killServer(
+export async function stopServer(
   serverConfig: ServerConfig,
   gracefulTimeout = 10000
 ): Promise<void> {
@@ -196,8 +196,8 @@ export async function switchModel(
   state.isSwitching = true;
 
   try {
-    progress?.onStatusUpdate?.(`Killing current server...`);
-    await killServer(config.server);
+    progress?.onStatusUpdate?.(`Stopping current server...`);
+    await stopServer(config.server);
 
     progress?.onStatusUpdate?.(`Starting ${model.name}...`);
     const child = spawn(model.command[0], model.command.slice(1), {

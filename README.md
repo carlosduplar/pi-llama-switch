@@ -73,7 +73,7 @@ Copy `examples/model-switcher.json` to `~/.pi/agent/model-switcher.json` and edi
 | `server.host` | yes | llama-server bind address |
 | `server.port` | yes | llama-server port |
 | `server.healthTimeout` | no | Seconds to wait for `/health` (default: 60) |
-| `server.portReleaseTimeout` | no | Seconds to wait for port release after kill (default: 15) |
+| `server.portReleaseTimeout` | no | Seconds to wait for port release after stop (default: 30) |
 | `defaultModel` | no | Model key active on startup (default: first model) |
 | `models.<key>.name` | yes | Display name |
 | `models.<key>.description` | yes | Short description |
@@ -131,7 +131,7 @@ Returns:
 
 ## How it works
 
-1. Kills the current llama-server via `SIGTERM` (tracked PID, not `pkill`)
+1. Stops the current llama-server via `SIGTERM` (tracked PID, not `pkill`)
 2. Waits for the port to be released
 3. Spawns a new server with the model's command array
 4. Polls `/health` until `status === "ok"` (or errors immediately on `status: "error"`)
@@ -141,7 +141,7 @@ Returns:
 
 | | pi-llama-cpp | pi-llama-switch |
 |---|---|---|
-| **Operation** | Load/unload within running server | Kill + restart with new config |
+| **Operation** | Load/unload within running server | Stop + restart with new config |
 | **Use case** | Multi-model router, hot swap | Single-model, different flags per model |
 | **Vision support** | Detects existing mmproj | Switches `--mmproj` flag |
 | **Context size** | Uses server's configured size | Changes `--ctx-size` per model |

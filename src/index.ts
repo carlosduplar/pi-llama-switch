@@ -86,7 +86,7 @@ export default async function (pi: ExtensionAPI) {
     promptSnippet: "Switch between local LLM models with different capabilities",
     promptGuidelines: [
       "Use model_switch when the user explicitly asks to switch models or needs a capability (vision, audio, reasoning) not supported by the current model.",
-      "model_switch kills the current llama-server and restarts with a new configuration. This takes 10-60 seconds depending on model size.",
+      "model_switch stops the current llama-server and restarts with a new configuration. This takes 10-60 seconds depending on model size.",
     ],
     parameters: Type.Object({
       model: Type.String({
