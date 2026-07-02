@@ -79,20 +79,9 @@ Copy `examples/model-switcher.json` to `~/.pi/agent/model-switcher.json` and edi
 }
 ```
 
-> [!IMPORTANT]
-> Ensure your JSON is valid. Use a linter or `cat ~/.pi/agent/model-switcher.json | python3 -m json.tool` to verify before restarting Pi.
-
-> [!IMPORTANT]
-> **Path & Argument Separation:** Always specify paths as separate array elements rather than joining them with `=`. Use `["-m", "~/models/model.gguf"]` instead of `["-m=~/models/model.gguf"]`. Tilde expansion (`~`) only works when the value is a separate element.
-
-> [!TIP]
-> **Large Models / Low VRAM:** If you are running large models (e.g., 35B) that require CPU offloading, the model can take over a minute to load. Increase `server.healthTimeout` (e.g., to `180` seconds) in your configuration to prevent startup timeout errors.
-
 ### vLLM
 
-The extension also works with vLLM. vLLM's OpenAI-compatible server exposes `/health` (returns 200 when healthy, 503 when the engine is dead) and uses the same `--host`/`--port` flags as llama.cpp.
-
-See `examples/model-switcher-vllm.json` for a full example:
+The extension should also work with vLLM. See `examples/model-switcher-vllm.json` for a full example:
 
 ```json
 {
@@ -132,8 +121,8 @@ See `examples/model-switcher-vllm.json` for a full example:
 
 | Field | Required | Description |
 |---|---|---|
-| `server.host` | yes | llama-server bind address |
-| `server.port` | yes | llama-server port |
+| `server.host` | yes | Server bind address |
+| `server.port` | yes | Server port |
 | `server.healthTimeout` | no | Seconds to wait for `/health` (default: 60) |
 | `server.portReleaseTimeout` | no | Seconds to wait for port release after stop (default: 30) |
 | `defaultModel` | no | Model key active on startup (default: first model) |
@@ -199,17 +188,6 @@ Returns:
 4. Polls `/health` until `status === "ok"` (or errors immediately on `status: "error"`)
 5. Registers the new model with Pi's provider system
 
-## vs pi-llama-cpp
-
-| | pi-llama-cpp | pi-llama-switch |
-|---|---|---|
-| **Operation** | Load/unload within running server | Stop + restart with new config |
-| **Use case** | Multi-model router, hot swap | Single-model, different flags per model |
-| **Vision support** | Detects existing mmproj | Switches `--mmproj` flag |
-| **Context size** | Uses server's configured size | Changes `--ctx-size` per model |
-
-They complement each other. Use `pi-llama-cpp` if your server runs multiple models simultaneously. Use `pi-llama-switch` if each model needs its own server configuration.
-
 ## Troubleshooting
 
 **Startup timeout:** Increase `server.healthTimeout` in your config. Large models on low VRAM can take 60+ seconds to load. vLLM models may need even longer for initial weight loading.
@@ -234,8 +212,5 @@ lsof -ti:8080 | xargs kill -9
 **Config not reloading:** Run `/switch reload` after editing `~/.pi/agent/model-switcher.json`. Verify JSON validity first.
 
 ## License
-
-[![npm version](https://img.shields.io/npm/v/pi-llama-switch.svg)](https://www.npmjs.com/package/pi-llama-switch)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 MIT
