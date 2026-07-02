@@ -174,7 +174,7 @@ export async function switchModel(
     const child = spawn(model.command[0], model.command.slice(1), {
       detached: true,
       stdio: ["ignore", "ignore", "pipe"],
-      env: { ...process.env },
+      env: { ...process.env, ...(model.env ?? {}) },
     });
 
     if (!child.pid) {

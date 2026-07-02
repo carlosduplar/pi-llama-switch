@@ -13,6 +13,7 @@ export interface ModelConfig {
   name: string;
   description: string;
   command: string[];
+  env?: Record<string, string>;
   vision: boolean;
   contextWindow: number;
   maxTokens: number;
@@ -85,6 +86,7 @@ function validateConfig(raw: any): SwitcherConfig {
       name: model.name,
       description: model.description,
       command: expandCommand(model.command),
+      env: model.env && typeof model.env === "object" ? model.env : undefined,
       vision: model.vision ?? false,
       contextWindow: model.contextWindow ?? 8192,
       maxTokens: model.maxTokens ?? 4096,

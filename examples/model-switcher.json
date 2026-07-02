@@ -10,8 +10,9 @@
     "qwen": {
       "name": "Qwen3.6 35B-A3B",
       "description": "Coding/Reasoning",
+      "env": { "GGML_OP_OFFLOAD_MIN_BATCH": "64" },
       "command": [
-        "llama-server",
+        "~/llama.cpp/llama-server",
         "-m", "~/models/qwen/Qwen3.6-35B-A3B.gguf",
         "-ngl", "999",
         "--flash-attn", "on",
@@ -25,28 +26,30 @@
       "vision": false,
       "contextWindow": 8192,
       "maxTokens": 4096,
-      "tags": ["coding", "reasoning", "moe"]
+      "tags": ["coding", "reasoning"]
     },
     "gemma4b": {
       "name": "Gemma 4 E4B",
       "description": "Fast/Vision/Audio",
       "command": [
-        "llama-server",
+        "~/llama.cpp/llama-server",
         "-m", "~/models/gemma/gemma-4-E4B.gguf",
         "--mmproj", "~/models/gemma/mmproj.gguf",
-        "-ngl", "999",
+        "-ngl", "99",
         "--flash-attn", "on",
         "--cache-type-k", "q8_0",
         "--cache-type-v", "q8_0",
-        "--ctx-size", "8192",
+        "--ctx-size", "131072",
         "--parallel", "1",
         "--host", "127.0.0.1",
         "--port", "8080"
       ],
       "vision": true,
-      "contextWindow": 8192,
+      "contextWindow": 131072,
       "maxTokens": 4096,
       "tags": ["fast", "vision", "audio"]
     }
+  }
+}
   }
 }
