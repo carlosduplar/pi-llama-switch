@@ -70,11 +70,32 @@ export function isLlamaServer(pid: number): boolean {
   }
 }
 
+function findPidOnPort(host: string, port: number): number | null {
+  try {
+    const { execSync } = require("node:child_process");
+    const output = execSync(`lsof -ti:${port}`, { encoding: "utf-8", timeout: 3000 }).trim();
+    if (!output) return null;
+    const pids = output.split("\n").map((s: string) => parseInt(s.trim(), 10)).filter((n: number) => !isNaN(n));
+    return pids.length > 0 ? pids[0] : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function killServer(
   serverConfig: ServerConfig,
   gracefulTimeout = 10000
 ): Promise<void> {
-  const pid = state.activePid;
+  let pid = state.activePid;
+
+  // If no tracked PID, detect from port
+  if (!pid || !isProcessAlive(pid)) {
+    pid = findPidOnPort(serverConfig.host, serverConfig.port);
+    if (pid) {
+      state.activePid = pid;
+      writePidFile(pid);
+    }
+  }
 
   if (pid && isProcessAlive(pid)) {
     try {
