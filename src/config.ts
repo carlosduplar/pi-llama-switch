@@ -29,6 +29,12 @@ export interface SwitcherConfig {
 const CONFIG_FILENAME = "model-switcher.json";
 
 function expandTilde(p: string): string {
+  // Handle --arg=~/path pattern
+  const eqMatch = p.match(/^(--\w[\w-]*=)(~\/.*)$/);
+  if (eqMatch) {
+    return eqMatch[1] + join(homedir(), eqMatch[2].slice(2));
+  }
+  // Handle standalone ~/path
   if (p.startsWith("~/")) {
     return join(homedir(), p.slice(2));
   }

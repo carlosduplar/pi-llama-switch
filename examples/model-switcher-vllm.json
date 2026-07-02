@@ -1,0 +1,61 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "healthTimeout": 120,
+    "portReleaseTimeout": 15
+  },
+  "defaultModel": "qwen",
+  "models": {
+    "qwen": {
+      "name": "Qwen3.6-35B-A3B",
+      "description": "Coding/Reasoning",
+      "command": [
+        "python3",
+        "-m",
+        "vllm.entrypoints.openai.api_server",
+        "--model",
+        "~/models/qwen/Qwen3.6-35B-A3B",
+        "--tensor-parallel-size",
+        "1",
+        "--gpu-memory-utilization",
+        "0.9",
+        "--max-model-len",
+        "8192",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "vision": false,
+      "contextWindow": 8192,
+      "maxTokens": 4096,
+      "tags": ["coding", "reasoning"]
+    },
+    "llama": {
+      "name": "Llama 4 Scout",
+      "description": "General purpose",
+      "command": [
+        "python3",
+        "-m",
+        "vllm.entrypoints.openai.api_server",
+        "--model",
+        "~/models/meta-llama/Llama-4-Scout-17B-16E-Instruct",
+        "--tensor-parallel-size",
+        "2",
+        "--gpu-memory-utilization",
+        "0.95",
+        "--max-model-len",
+        "16384",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "vision": false,
+      "contextWindow": 16384,
+      "maxTokens": 8192,
+      "tags": ["general"]
+    }
+  }
+}

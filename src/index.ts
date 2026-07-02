@@ -1,6 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { readFileSync } from "node:fs";
+import { execSync } from "node:child_process";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { loadConfig, type SwitcherConfig } from "./config.js";
 import {
   getState,
@@ -12,6 +15,7 @@ import {
   switchModel,
   disconnectState,
   deletePidFile,
+  updateActiveState,
 } from "./switcher.js";
 import { checkHealth } from "./health.js";
 import { buildProviderModels, getModelForProvider } from "./provider.js";
@@ -19,7 +23,7 @@ import { buildProviderModels, getModelForProvider } from "./provider.js";
 const PROVIDER_ID = "llama-local";
 
 export default async function (pi: ExtensionAPI) {
-  const config = loadConfig();
+  let config = loadConfig();
 
   if (!config) {
     console.warn(
@@ -50,7 +54,7 @@ export default async function (pi: ExtensionAPI) {
       }
 
       if (subcommand === "reload") {
-        return handleReload(pi, ctx);
+        return handleReload(pi, config, ctx);
       }
 
       if (subcommand === "logs") {
@@ -185,14 +189,12 @@ export default async function (pi: ExtensionAPI) {
     if (pid && isProcessAlive(pid) && isLlamaServer(pid)) {
       const alive = await checkHealth(config.server.host, config.server.port);
       if (alive) {
-        const state = getState();
-        if (!state.activeModelKey) {
-          const modelKey = detectModelFromPid(config, pid);
-          if (modelKey) {
-            registerProvider(pi, config, modelKey);
-          }
-        }
-        ctx.ui.setStatus("llama-switch", `⚡ ${config.defaultModel}`);
+        const modelKey = detectModelFromPid(config, pid);
+        const activeKey = modelKey ?? config.defaultModel;
+        updateActiveState(activeKey, pid);
+        registerProvider(pi, config, activeKey);
+        const model = config.models[activeKey];
+        ctx.ui.setStatus("llama-switch", `⚡ ${model?.name ?? activeKey}`);
         return;
       }
     }
@@ -351,12 +353,15 @@ function handleStatus(config: SwitcherConfig, ctx: any): void {
   }
 }
 
-function handleReload(pi: ExtensionAPI, ctx: any): void {
+function handleReload(pi: ExtensionAPI, config: SwitcherConfig, ctx: any): void {
   const newConfig = loadConfig();
   if (!newConfig) {
     ctx.ui.notify("Failed to reload config: file not found", "error");
     return;
   }
+  Object.assign(config, newConfig);
+  const state = getState();
+  registerProvider(pi, config, state.activeModelKey ?? config.defaultModel);
   ctx.ui.notify(
     `Reloaded config: ${Object.keys(newConfig.models).length} models`,
     "info"
@@ -364,12 +369,7 @@ function handleReload(pi: ExtensionAPI, ctx: any): void {
 }
 
 function handleLogs(ctx: any): void {
-  const logPath = require("node:path").join(
-    require("node:os").homedir(),
-    ".pi",
-    "agent",
-    "llama-switch.log"
-  );
+  const logPath = join(homedir(), ".pi", "agent", "llama-switch.log");
 
   try {
     const content = readFileSync(logPath, "utf-8");
@@ -382,21 +382,19 @@ function handleLogs(ctx: any): void {
 
 function detectModelFromPid(config: SwitcherConfig, pid: number): string | null {
   try {
-    const { execSync } = require("node:child_process");
-    const cmdline = execSync(`cat /proc/${pid}/cmdline`, {
+    const args = execSync(`ps -p ${pid} -o args=`, {
       encoding: "utf-8",
       timeout: 1000,
-    });
+    }).trim();
 
     for (const [key, model] of Object.entries(config.models)) {
-      // Check if the model's GGUF path appears in the cmdline
       const ggufArg = model.command.find((arg) => arg.endsWith(".gguf"));
-      if (ggufArg && cmdline.includes(ggufArg)) {
+      if (ggufArg && args.includes(ggufArg)) {
         return key;
       }
     }
   } catch {
-    // /proc not available (macOS) or other error
+    // ps not available or other error
   }
 
   return config.defaultModel || null;

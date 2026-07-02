@@ -16,11 +16,23 @@ async function fetchHealth(
       headers: { Accept: "application/json" },
     });
 
-    if (!res.ok && res.status !== 503) {
+    // 503 means server is alive but unhealthy (vLLM engine dead)
+    if (res.status === 503) {
+      return { status: "error", error: "server returned 503" };
+    }
+
+    if (!res.ok) {
       return { status: "unknown", error: `HTTP ${res.status}` };
     }
 
-    const data = await res.json() as any;
+    // Try parsing JSON body (llama.cpp returns { status: "ok" })
+    // vLLM returns 200 with empty body — treat as healthy
+    const text = await res.text();
+    if (!text) {
+      return { status: "ok" };
+    }
+
+    const data = JSON.parse(text);
     const s = data?.status;
 
     if (s === "ok") return { status: "ok" };
@@ -65,7 +77,7 @@ export async function waitForHealth(
 
     if (lastStatus.status === "error") {
       throw new Error(
-        `llama-server reported error status: ${lastStatus.error ?? "unknown"}`
+        `Server reported error status: ${lastStatus.error ?? "unknown"}`
       );
     }
 

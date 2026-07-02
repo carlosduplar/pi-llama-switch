@@ -1,5 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, unlinkSync } from "node:fs";
+import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { readFileSync, writeFileSync, existsSync, unlinkSync, createWriteStream } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { waitForHealth } from "./health.js";
@@ -22,6 +22,12 @@ const state: SwitcherState = {
 
 export function getState(): Readonly<SwitcherState> {
   return state;
+}
+
+export function updateActiveState(modelKey: string, pid: number): void {
+  state.activeModelKey = modelKey;
+  state.activePid = pid;
+  writePidFile(pid);
 }
 
 function getPidPath(): string {
@@ -55,14 +61,13 @@ export function isProcessAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err: any) {
+    return err?.code === "EPERM";
   }
 }
 
 export function isLlamaServer(pid: number): boolean {
   try {
-    const { execSync } = require("node:child_process");
     const comm = execSync(`ps -p ${pid} -o comm=`, { encoding: "utf-8" }).trim();
     return comm.includes("llama-server");
   } catch {
@@ -72,7 +77,6 @@ export function isLlamaServer(pid: number): boolean {
 
 export function findLlamaServerPid(port: number): number | null {
   try {
-    const { execSync } = require("node:child_process");
     const output = execSync("pgrep -af llama-server", { encoding: "utf-8", timeout: 3000 }).trim();
     if (!output) return null;
     for (const line of output.split("\n")) {
@@ -104,7 +108,7 @@ export async function stopServer(
     }
   }
 
-  if (pid && isProcessAlive(pid)) {
+  if (pid && isProcessAlive(pid) && isLlamaServer(pid)) {
     try {
       process.kill(pid, "SIGTERM");
     } catch {
@@ -194,15 +198,18 @@ export async function switchModel(
   }
 
   state.isSwitching = true;
+  let child: ChildProcess | null = null;
 
   try {
     progress?.onStatusUpdate?.(`Stopping current server...`);
     await stopServer(config.server);
 
     progress?.onStatusUpdate?.(`Starting ${model.name}...`);
-    const child = spawn(model.command[0], model.command.slice(1), {
+    const logPath = getLogPath();
+    const logStream = createWriteStream(logPath, { flags: "w" });
+    child = spawn(model.command[0], model.command.slice(1), {
       detached: true,
-      stdio: ["ignore", "ignore", "pipe"],
+      stdio: ["ignore", "ignore", logStream],
       env: { ...process.env, ...(model.env ?? {}) },
     });
 
@@ -210,16 +217,20 @@ export async function switchModel(
       throw new Error("Failed to start llama-server: no PID returned");
     }
 
-    // Capture stderr to log file
-    const logPath = getLogPath();
-    const logStream = require("node:fs").createWriteStream(logPath, { flags: "w" });
-    child.stderr?.pipe(logStream);
+    child.unref();
 
     state.activePid = child.pid;
     writePidFile(child.pid);
 
+    // Abort health check if child exits unexpectedly
+    const childAbort = new AbortController();
+    const combinedSignal = signal
+      ? AbortSignal.any([signal, childAbort.signal])
+      : childAbort.signal;
+
     child.on("error", (err) => {
       console.error(`llama-server process error: ${err.message}`);
+      childAbort.abort();
       state.activeModelKey = null;
       state.activePid = null;
       deletePidFile();
@@ -229,7 +240,8 @@ export async function switchModel(
       if (code !== null && code !== 0) {
         console.error(`llama-server exited with code ${code}`);
       }
-      if (state.activePid === child.pid) {
+      childAbort.abort();
+      if (child && state.activePid === child.pid) {
         state.activeModelKey = null;
         state.activePid = null;
         deletePidFile();
@@ -248,12 +260,15 @@ export async function switchModel(
           `Loading ${model.name}... ${elapsed}s (${status.status})`
         );
       },
-      signal
+      combinedSignal
     );
 
     state.activeModelKey = modelKey;
     progress?.onStatusUpdate?.(`Switched to ${model.name}`);
   } catch (err) {
+    if (child) {
+      try { child.kill("SIGKILL"); } catch {}
+    }
     state.activeModelKey = null;
     state.activePid = null;
     deletePidFile();

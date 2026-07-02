@@ -3,7 +3,7 @@
 <div align="center">
 
 <!-- Add a cover image: docs/cover.png -->
-Restart [llama-server](https://github.com/ggml-org/llama.cpp) with different model configurations. For single-model setups where each model needs different flags -- context size, vision projector, sampling params, GPU offload.
+Restart local LLM servers with different model configurations. For single-model setups where each model needs different flags -- context size, vision projector, sampling params, GPU offload. Works with [llama.cpp](https://github.com/ggml-org/llama.cpp) and [vLLM](https://github.com/vllm-project/vllm) (experimental).
 
 [![npm version](https://img.shields.io/npm/v/pi-llama-switch.svg)](https://www.npmjs.com/package/pi-llama-switch)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -14,11 +14,24 @@ Restart [llama-server](https://github.com/ggml-org/llama.cpp) with different mod
 
 - **`/switch` command** -- interactive model picker or direct switch with `/switch qwen`
 - **`model_switch` tool** -- the LLM can request a switch programmatically
-- **Health checking** -- polls llama-server `/health` endpoint with progress updates
+- **Health checking** -- polls `/health` endpoint with progress updates
 - **Provider registration** -- after switch, Pi natively knows the active model via `/model` and `Ctrl+P`
 - **PID tracking** -- clean process lifecycle management with graceful shutdown
 - **Stderr logging** -- captures startup failures to `~/.pi/agent/llama-switch.log`
 - **Auto-reconnect** -- reconnects to a running server on Pi restart
+- **Multi-backend** -- works with llama.cpp and vLLM (experimental)
+
+## Who is this for
+
+You have a single GPU and multiple local models, but each model needs different server flags. Instead of maintaining separate terminals or scripts, you switch between them with `/switch`.
+
+**Common setups:**
+
+- **Coding vs general-purpose:** Qwen3.6 for code (small context, fast) and Gemma 4 for general tasks (vision, larger context) -- each needs different `--ctx-size` and `--mmproj` flags.
+- **Fast vs powerful:** A small E4B model for quick tasks and a 35B model for complex reasoning -- the small model loads in seconds, the large one needs 60+ seconds and more VRAM.
+- **Text vs multimodal:** A text-only model for coding and a vision model for image analysis -- the vision model needs `--mmproj` which adds VRAM overhead.
+
+If you only run one model at a time and don't change server flags between models, you don't need this extension.
 
 ## Install
 
@@ -65,6 +78,55 @@ Copy `examples/model-switcher.json` to `~/.pi/agent/model-switcher.json` and edi
   }
 }
 ```
+
+> [!IMPORTANT]
+> Ensure your JSON is valid. Use a linter or `cat ~/.pi/agent/model-switcher.json | python3 -m json.tool` to verify before restarting Pi.
+
+> [!IMPORTANT]
+> **Path & Argument Separation:** Always specify paths as separate array elements rather than joining them with `=`. Use `["-m", "~/models/model.gguf"]` instead of `["-m=~/models/model.gguf"]`. Tilde expansion (`~`) only works when the value is a separate element.
+
+> [!TIP]
+> **Large Models / Low VRAM:** If you are running large models (e.g., 35B) that require CPU offloading, the model can take over a minute to load. Increase `server.healthTimeout` (e.g., to `180` seconds) in your configuration to prevent startup timeout errors.
+
+### vLLM
+
+The extension also works with vLLM. vLLM's OpenAI-compatible server exposes `/health` (returns 200 when healthy, 503 when the engine is dead) and uses the same `--host`/`--port` flags as llama.cpp.
+
+See `examples/model-switcher-vllm.json` for a full example:
+
+```json
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8000,
+    "healthTimeout": 120,
+    "portReleaseTimeout": 15
+  },
+  "defaultModel": "qwen",
+  "models": {
+    "qwen": {
+      "name": "Qwen3.6-35B-A3B",
+      "description": "Coding/Reasoning",
+      "command": [
+        "python3", "-m", "vllm.entrypoints.openai.api_server",
+        "--model", "~/models/qwen/Qwen3.6-35B-A3B",
+        "--tensor-parallel-size", "1",
+        "--gpu-memory-utilization", "0.9",
+        "--max-model-len", "8192",
+        "--host", "127.0.0.1",
+        "--port", "8000"
+      ],
+      "vision": false,
+      "contextWindow": 8192,
+      "maxTokens": 4096,
+      "tags": ["coding", "reasoning"]
+    }
+  }
+}
+```
+
+> [!NOTE]
+> vLLM support is verified against docs but not tested end-to-end. The health endpoint and OpenAI-compatible API are standard. Report issues if you test this.
 
 ### Config fields
 
@@ -131,7 +193,7 @@ Returns:
 
 ## How it works
 
-1. Stops the current llama-server via `SIGTERM` (tracked PID, not `pkill`)
+1. Stops the current server via `SIGTERM` (tracked PID, not `pkill`)
 2. Waits for the port to be released
 3. Spawns a new server with the model's command array
 4. Polls `/health` until `status === "ok"` (or errors immediately on `status: "error"`)
@@ -147,6 +209,29 @@ Returns:
 | **Context size** | Uses server's configured size | Changes `--ctx-size` per model |
 
 They complement each other. Use `pi-llama-cpp` if your server runs multiple models simultaneously. Use `pi-llama-switch` if each model needs its own server configuration.
+
+## Troubleshooting
+
+**Startup timeout:** Increase `server.healthTimeout` in your config. Large models on low VRAM can take 60+ seconds to load. vLLM models may need even longer for initial weight loading.
+
+**Logs:** Check `~/.pi/agent/llama-switch.log` for stderr output:
+```bash
+# From Pi
+/switch logs
+
+# From terminal
+tail -50 ~/.pi/agent/llama-switch.log
+tail -f ~/.pi/agent/llama-switch.log  # follow in real time
+```
+
+**Port still in use after stop:** Increase `server.portReleaseTimeout` (default: 30s). Large context sizes take longer to flush KV cache.
+
+**Switch failed, server still running:** The extension kills orphaned processes on failure. If something slips through:
+```bash
+lsof -ti:8080 | xargs kill -9
+```
+
+**Config not reloading:** Run `/switch reload` after editing `~/.pi/agent/model-switcher.json`. Verify JSON validity first.
 
 ## License
 
