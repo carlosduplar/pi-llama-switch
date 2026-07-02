@@ -5,8 +5,10 @@ import { loadConfig, type SwitcherConfig } from "./config.js";
 import {
   getState,
   readPidFile,
+  writePidFile,
   isProcessAlive,
   isLlamaServer,
+  findLlamaServerPid,
   switchModel,
   disconnectState,
   deletePidFile,
@@ -173,14 +175,18 @@ export default async function (pi: ExtensionAPI) {
 
   // session_start: reconnect to existing server
   pi.on("session_start", async (_event, ctx) => {
-    const pid = readPidFile();
+    let pid = readPidFile();
+    if (!pid || !isProcessAlive(pid) || !isLlamaServer(pid)) {
+      pid = findLlamaServerPid(config.server.port);
+      if (pid) {
+        writePidFile(pid);
+      }
+    }
     if (pid && isProcessAlive(pid) && isLlamaServer(pid)) {
       const alive = await checkHealth(config.server.host, config.server.port);
       if (alive) {
-        // Detect active model from config
         const state = getState();
         if (!state.activeModelKey) {
-          // Try to figure out which model is running by checking the process args
           const modelKey = detectModelFromPid(config, pid);
           if (modelKey) {
             registerProvider(pi, config, modelKey);
@@ -191,7 +197,6 @@ export default async function (pi: ExtensionAPI) {
       }
     }
 
-    // No running server found
     deletePidFile();
     ctx.ui.setStatus("llama-switch", "no model loaded");
   });

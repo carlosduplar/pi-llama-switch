@@ -70,13 +70,21 @@ export function isLlamaServer(pid: number): boolean {
   }
 }
 
-function findPidOnPort(host: string, port: number): number | null {
+export function findLlamaServerPid(port: number): number | null {
   try {
     const { execSync } = require("node:child_process");
-    const output = execSync(`lsof -ti:${port}`, { encoding: "utf-8", timeout: 3000 }).trim();
+    const output = execSync("pgrep -af llama-server", { encoding: "utf-8", timeout: 3000 }).trim();
     if (!output) return null;
-    const pids = output.split("\n").map((s: string) => parseInt(s.trim(), 10)).filter((n: number) => !isNaN(n));
-    return pids.length > 0 ? pids[0] : null;
+    for (const line of output.split("\n")) {
+      const match = line.match(/^(\d+)\s/);
+      if (!match) continue;
+      const pid = parseInt(match[1], 10);
+      if (isNaN(pid)) continue;
+      if (line.includes(`--port`) && line.includes(String(port))) {
+        return pid;
+      }
+    }
+    return null;
   } catch {
     return null;
   }
@@ -88,9 +96,8 @@ export async function killServer(
 ): Promise<void> {
   let pid = state.activePid;
 
-  // If no tracked PID, detect from port
   if (!pid || !isProcessAlive(pid)) {
-    pid = findPidOnPort(serverConfig.host, serverConfig.port);
+    pid = findLlamaServerPid(serverConfig.port);
     if (pid) {
       state.activePid = pid;
       writePidFile(pid);
