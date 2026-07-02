@@ -1,0 +1,35 @@
+{
+  "name": "pi-llama-switch",
+  "version": "1.0.0",
+  "description": "Restart llama-server with different model configurations. For single-model setups where models need different flags (context size, vision projector, sampling params).",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "llama",
+    "llama-cpp",
+    "model-switch"
+  ],
+  "author": "Carlos Duplar",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/carlosduplar/pi-llama-switch.git"
+  },
+  "homepage": "https://github.com/carlosduplar/pi-llama-switch#readme",
+  "bugs": {
+    "url": "https://github.com/carlosduplar/pi-llama-switch/issues"
+  },
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@sinclair/typebox": "^0.34.49",
+    "typescript": "^5.9.3"
+  }
+}

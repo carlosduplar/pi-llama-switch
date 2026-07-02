@@ -1,0 +1,52 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "healthTimeout": 60,
+    "portReleaseTimeout": 15
+  },
+  "defaultModel": "qwen",
+  "models": {
+    "qwen": {
+      "name": "Qwen3.6 35B-A3B",
+      "description": "Coding/Reasoning",
+      "command": [
+        "llama-server",
+        "-m", "~/models/qwen/Qwen3.6-35B-A3B.gguf",
+        "-ngl", "999",
+        "--flash-attn", "on",
+        "--cache-type-k", "q8_0",
+        "--cache-type-v", "q8_0",
+        "--ctx-size", "8192",
+        "--parallel", "1",
+        "--host", "127.0.0.1",
+        "--port", "8080"
+      ],
+      "vision": false,
+      "contextWindow": 8192,
+      "maxTokens": 4096,
+      "tags": ["coding", "reasoning", "moe"]
+    },
+    "gemma4b": {
+      "name": "Gemma 4 E4B",
+      "description": "Fast/Vision/Audio",
+      "command": [
+        "llama-server",
+        "-m", "~/models/gemma/gemma-4-E4B.gguf",
+        "--mmproj", "~/models/gemma/mmproj.gguf",
+        "-ngl", "999",
+        "--flash-attn", "on",
+        "--cache-type-k", "q8_0",
+        "--cache-type-v", "q8_0",
+        "--ctx-size", "8192",
+        "--parallel", "1",
+        "--host", "127.0.0.1",
+        "--port", "8080"
+      ],
+      "vision": true,
+      "contextWindow": 8192,
+      "maxTokens": 4096,
+      "tags": ["fast", "vision", "audio"]
+    }
+  }
+}
