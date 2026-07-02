@@ -207,6 +207,10 @@ export async function switchModel(
     progress?.onStatusUpdate?.(`Starting ${model.name}...`);
     const logPath = getLogPath();
     const logStream = createWriteStream(logPath, { flags: "w" });
+    await new Promise<void>((resolve, reject) => {
+      logStream.on("open", () => resolve());
+      logStream.on("error", reject);
+    });
     child = spawn(model.command[0], model.command.slice(1), {
       detached: true,
       stdio: ["ignore", "ignore", logStream],
