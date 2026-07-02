@@ -72,7 +72,7 @@ export function isLlamaServer(pid: number): boolean {
 
 export async function killServer(
   serverConfig: ServerConfig,
-  gracefulTimeout = 5000
+  gracefulTimeout = 10000
 ): Promise<void> {
   const pid = state.activePid;
 
@@ -94,7 +94,8 @@ export async function killServer(
       } catch {
         // Already dead
       }
-      await new Promise((r) => setTimeout(r, 500));
+      // Give OS time to reclaim socket after SIGKILL
+      await new Promise((r) => setTimeout(r, 2000));
     }
   }
 

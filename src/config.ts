@@ -77,7 +77,7 @@ function validateConfig(raw: any): SwitcherConfig {
     host: raw.server.host,
     port: raw.server.port,
     healthTimeout: raw.server.healthTimeout ?? 60,
-    portReleaseTimeout: raw.server.portReleaseTimeout ?? 15,
+    portReleaseTimeout: raw.server.portReleaseTimeout ?? 30,
   };
 
   const models: Record<string, ModelConfig> = {};
