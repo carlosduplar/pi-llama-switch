@@ -16,9 +16,9 @@ async function fetchHealth(
       headers: { Accept: "application/json" },
     });
 
-    // 503 means server is alive but unhealthy (vLLM engine dead)
+    // 503 means server is alive but still loading (llama-server) or unhealthy (vLLM)
     if (res.status === 503) {
-      return { status: "error", error: "server returned 503" };
+      return { status: "loading", error: "server returned 503" };
     }
 
     if (!res.ok) {
