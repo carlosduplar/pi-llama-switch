@@ -3,7 +3,7 @@
 <div align="center">
 
 <!-- Add a cover image: docs/cover.png -->
-Restart local LLM servers with different model configurations. For single-model setups where each model needs different flags -- context size, vision projector, sampling params, GPU offload. Works with [llama.cpp](https://github.com/ggml-org/llama.cpp) and [vLLM](https://github.com/vllm-project/vllm) (experimental).
+Restart local LLM servers with different model configurations. For single-model setups where each model needs different flags: context size, vision projector, sampling params, GPU offload. Works with [llama.cpp](https://github.com/ggml-org/llama.cpp) and [vLLM](https://github.com/vllm-project/vllm) (experimental).
 
 [![npm version](https://img.shields.io/npm/v/pi-llama-switch.svg)](https://www.npmjs.com/package/pi-llama-switch)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -27,9 +27,9 @@ You have a single GPU and multiple local models, but each model needs different 
 
 **Common setups:**
 
-- **Coding vs general-purpose:** Qwen3.6 for code (small context, fast) and Gemma 4 for general tasks (vision, larger context) -- each needs different `--ctx-size` and `--mmproj` flags.
-- **Fast vs powerful:** A small E4B model for quick tasks and a 35B model for complex reasoning -- the small model loads in seconds, the large one needs 60+ seconds and more VRAM.
-- **Text vs multimodal:** A text-only model for coding and a vision model for image analysis -- the vision model needs `--mmproj` which adds VRAM overhead.
+- **Coding vs general-purpose:** Qwen3.6 for code (small context, fast) and Gemma 4 for general tasks (vision, larger context) -- each with different `--ctx-size` and `--mmproj` flags.
+- **Fast vs powerful:** A smaller model for quick tasks and a large one for complex reasoning -- small model loads in seconds, large one needs more time and VRAM.
+- **Text vs multimodal:** A text-only model for coding and a vision model for image analysis -- vision model needs `--mmproj`, which adds VRAM overhead.
 
 If you only run one model at a time and don't change server flags between models, you don't need this extension.
 
