@@ -1,9 +1,12 @@
-import type { ServerConfig } from "./config.js";
+import { formatServerUrl, type ServerConfig } from "./config.js";
 
 export interface HealthStatus {
   status: "ok" | "loading" | "error" | "unknown";
   error?: string;
 }
+
+// Cap a single health attempt so a stalled server cannot consume the whole timeout.
+const MAX_ATTEMPT_TIMEOUT_MS = 5000;
 
 async function fetchHealth(
   host: string,
@@ -11,7 +14,7 @@ async function fetchHealth(
   signal?: AbortSignal
 ): Promise<HealthStatus> {
   try {
-    const res = await fetch(`http://${host}:${port}/health`, {
+    const res = await fetch(formatServerUrl(host, port, "/health"), {
       signal,
       headers: { Accept: "application/json" },
     });
@@ -43,6 +46,9 @@ async function fetchHealth(
 
     return { status: s ?? "unknown" };
   } catch (err: any) {
+    if (err.name === "TimeoutError") {
+      return { status: "unknown", error: "request timed out" };
+    }
     if (err.name === "AbortError") {
       return { status: "unknown", error: "aborted" };
     }
@@ -55,21 +61,55 @@ export type HealthProgressCallback = (
   lastStatus: HealthStatus
 ) => void;
 
+function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(new Error("Health check aborted"));
+      return;
+    }
+
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new Error("Health check aborted"));
+    };
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export async function waitForHealth(
   server: ServerConfig,
   onProgress?: HealthProgressCallback,
   signal?: AbortSignal
 ): Promise<HealthStatus> {
   const { host, port, healthTimeout } = server;
-  const deadline = Date.now() + healthTimeout * 1000;
+  const startTime = Date.now();
+  const deadline = startTime + healthTimeout * 1000;
   let lastStatus: HealthStatus = { status: "unknown" };
 
-  while (Date.now() < deadline) {
+  while (true) {
     if (signal?.aborted) {
       throw new Error("Health check aborted");
     }
 
-    lastStatus = await fetchHealth(host, port, signal);
+    const remainingMs = deadline - Date.now();
+    if (remainingMs <= 0) break;
+
+    const attemptTimeout = AbortSignal.timeout(
+      Math.min(remainingMs, MAX_ATTEMPT_TIMEOUT_MS)
+    );
+    const requestSignal = signal
+      ? AbortSignal.any([signal, attemptTimeout])
+      : attemptTimeout;
+
+    lastStatus = await fetchHealth(host, port, requestSignal);
+
+    if (signal?.aborted) {
+      throw new Error("Health check aborted");
+    }
 
     if (lastStatus.status === "ok") {
       return lastStatus;
@@ -81,9 +121,12 @@ export async function waitForHealth(
       );
     }
 
-    onProgress?.(Math.floor((Date.now() - (deadline - healthTimeout * 1000)) / 1000), lastStatus);
+    onProgress?.(Math.floor((Date.now() - startTime) / 1000), lastStatus);
 
-    await new Promise((r) => setTimeout(r, 1000));
+    const sleepMs = Math.min(1000, Math.max(0, deadline - Date.now()));
+    if (sleepMs > 0) {
+      await abortableSleep(sleepMs, signal);
+    }
   }
 
   throw new Error(
@@ -93,8 +136,9 @@ export async function waitForHealth(
 
 export async function checkHealth(
   host: string,
-  port: number
+  port: number,
+  timeoutMs = 5000
 ): Promise<boolean> {
-  const status = await fetchHealth(host, port);
+  const status = await fetchHealth(host, port, AbortSignal.timeout(timeoutMs));
   return status.status === "ok";
 }

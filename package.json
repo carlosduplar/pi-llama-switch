@@ -37,5 +37,8 @@
   },
   "devDependencies": {
     "typescript": "^5.9.3"
+  },
+  "scripts": {
+    "test": "tsc --module nodenext --moduleResolution nodenext --outDir .test-dist --declaration false --sourceMap false && node --test test/fixes.test.cjs"
   }
 }

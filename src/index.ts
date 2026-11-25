@@ -2,35 +2,66 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "@sinclair/typebox";
 import { readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { homedir } from "node:os";
-import { loadConfig, type SwitcherConfig } from "./config.js";
+import {
+  formatServerUrl,
+  loadConfig,
+  type SwitcherConfig,
+} from "./config.js";
 import {
   getState,
   readPidFile,
   writePidFile,
   isProcessAlive,
-  isLlamaServer,
-  findLlamaServerPid,
+  isManagedServer,
+  findServerPid,
   switchModel,
   disconnectState,
   deletePidFile,
   updateActiveState,
+  clearActiveModelKey,
+  commandLineHasToken,
 } from "./switcher.js";
 import { checkHealth } from "./health.js";
-import { buildProviderModels, getModelForProvider } from "./provider.js";
+import {
+  buildProviderModels,
+  findFlagValue,
+  resolveApiModelId,
+} from "./provider.js";
 
 const PROVIDER_ID = "llama-local";
 
-export default async function (pi: ExtensionAPI) {
-  let config = loadConfig();
+const SECONDARY_MODEL_FLAGS = [
+  "--mmproj",
+  "--mmproj-url",
+  "--lora",
+  "--lora-scaled",
+  "--draft",
+  "-md",
+  "--model-draft",
+  "--control-vector",
+];
 
-  if (!config) {
+const DISTINGUISHING_FLAGS = [
+  "--mmproj",
+  "--ctx-size",
+  "--max-model-len",
+  "--alias",
+  "--served-model-name",
+];
+
+export default async function (pi: ExtensionAPI) {
+  const loadedConfig = loadConfig();
+
+  if (!loadedConfig) {
     console.warn(
       "[pi-llama-switch] No config found at ~/.pi/agent/model-switcher.json"
     );
     return;
   }
+
+  let config: SwitcherConfig = loadedConfig;
 
   // Register provider from default model
   registerProvider(pi, config, config.defaultModel);
@@ -54,7 +85,9 @@ export default async function (pi: ExtensionAPI) {
       }
 
       if (subcommand === "reload") {
-        return handleReload(pi, config, ctx);
+        return await handleReload(pi, ctx, (next) => {
+          config = next;
+        });
       }
 
       if (subcommand === "logs") {
@@ -104,11 +137,13 @@ export default async function (pi: ExtensionAPI) {
       ),
     }),
     async execute(toolCallId, params, signal, onUpdate, ctx) {
+      const snapshot = config;
       const modelKey = params.model;
       const dryRun = params.dryRun ?? false;
+      const model = snapshot.models[modelKey];
 
-      if (!config.models[modelKey]) {
-        const available = Object.keys(config.models).join(", ");
+      if (!model) {
+        const available = Object.keys(snapshot.models).join(", ");
         return {
           content: [
             {
@@ -116,12 +151,11 @@ export default async function (pi: ExtensionAPI) {
               text: `Model '${modelKey}' not found. Available: ${available}`,
             },
           ],
-          details: { error: "model_not_found", available: Object.keys(config.models) },
+          details: { error: "model_not_found", available: Object.keys(snapshot.models) },
         };
       }
 
       if (dryRun) {
-        const model = config.models[modelKey];
         return {
           content: [
             {
@@ -134,25 +168,27 @@ export default async function (pi: ExtensionAPI) {
       }
 
       onUpdate?.({
-        content: [{ type: "text", text: `Switching to ${config.models[modelKey].name}...` }],
+        content: [{ type: "text", text: `Switching to ${model.name}...` }],
         details: { phase: "switching", model: modelKey },
       });
 
       try {
-        await switchModel(config, modelKey, {
+        await switchModel(snapshot, modelKey, {
           onStatusUpdate: (msg) => {
             onUpdate?.({ content: [{ type: "text", text: msg }], details: { phase: "switching", model: modelKey } });
           },
         }, signal);
 
-        registerProvider(pi, config, modelKey);
+        const selected = await activateModel(pi, snapshot, modelKey, ctx);
+        const selectionNote = selected
+          ? ""
+          : "\nThe server switched and the provider was updated. If Pi did not select the new model automatically, choose it via /model.";
 
-        const model = config.models[modelKey];
         return {
           content: [
             {
               type: "text",
-              text: `Switched to ${model.name} (${model.description}). Context window: ${model.contextWindow} tokens.`,
+              text: `Switched to ${model.name} (${model.description}). Context window: ${model.contextWindow} tokens.${selectionNote}`,
             },
           ],
           details: {
@@ -160,6 +196,7 @@ export default async function (pi: ExtensionAPI) {
             model: modelKey,
             name: model.name,
             contextWindow: model.contextWindow,
+            selectedModel: selected,
           },
         } as any;
       } catch (err: any) {
@@ -180,21 +217,18 @@ export default async function (pi: ExtensionAPI) {
   // session_start: reconnect to existing server
   pi.on("session_start", async (_event, ctx) => {
     let pid = readPidFile();
-    if (!pid || !isProcessAlive(pid) || !isLlamaServer(pid)) {
-      pid = findLlamaServerPid(config.server.port);
+    if (!pid || !isProcessAlive(pid) || !isManagedServer(pid, config)) {
+      pid = findServerPid(config.server.port, config);
       if (pid) {
         writePidFile(pid);
       }
     }
-    if (pid && isProcessAlive(pid) && isLlamaServer(pid)) {
+    if (pid && isProcessAlive(pid) && isManagedServer(pid, config)) {
       const alive = await checkHealth(config.server.host, config.server.port);
       if (alive) {
-        const modelKey = detectModelFromPid(config, pid);
-        const activeKey = modelKey ?? config.defaultModel;
-        updateActiveState(activeKey, pid);
-        registerProvider(pi, config, activeKey);
-        const model = config.models[activeKey];
-        ctx.ui.setStatus("llama-switch", `⚡ ${model?.name ?? activeKey}`);
+        const modelKey = detectModelFromPid(config, pid) ?? config.defaultModel;
+        updateActiveState(modelKey, pid);
+        await activateModel(pi, config, modelKey, ctx);
         return;
       }
     }
@@ -230,19 +264,47 @@ function registerProvider(
   config: SwitcherConfig,
   modelKey: string
 ): void {
+  const targetModel = config.models[modelKey];
+  if (!targetModel) return;
+
   const models = buildProviderModels(config);
-  const activeModel = models.find((m) => m.id === modelKey);
+  const activeApiId = resolveApiModelId(modelKey, targetModel);
+  const activeModel = models.find((m) => m.id === activeApiId);
   if (!activeModel) return;
 
   pi.registerProvider(PROVIDER_ID, {
-    baseUrl: `http://${config.server.host}:${config.server.port}/v1`,
+    baseUrl: formatServerUrl(config.server.host, config.server.port, "/v1"),
     apiKey: "no-key",
     api: "openai-completions",
-    models: models.map((m) => ({
-      ...m,
-      reasoning: m.id === modelKey ? (activeModel.reasoning ?? false) : false,
-    })),
+    models,
   });
+}
+
+export async function activateModel(
+  pi: ExtensionAPI,
+  config: SwitcherConfig,
+  modelKey: string,
+  ctx?: any
+): Promise<boolean> {
+  registerProvider(pi, config, modelKey);
+
+  const model = config.models[modelKey];
+  if (!model) return false;
+
+  const apiModelId = resolveApiModelId(modelKey, model);
+  ctx?.ui?.setStatus?.("llama-switch", `⚡ ${model.name}`);
+
+  if (ctx?.modelRegistry?.find && typeof pi.setModel === "function") {
+    const registered = ctx.modelRegistry.find(PROVIDER_ID, apiModelId);
+    if (!registered) return false;
+    try {
+      return await pi.setModel(registered);
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
 }
 
 async function handleInteractiveSwitch(
@@ -250,8 +312,9 @@ async function handleInteractiveSwitch(
   config: SwitcherConfig,
   ctx: any
 ): Promise<void> {
+  const snapshot = config;
   const state = getState();
-  const entries = Object.entries(config.models).map(([key, model]) => {
+  const entries = Object.entries(snapshot.models).map(([key, model]) => {
     const isCurrent = state.activeModelKey === key;
     const vision = model.vision ? " [vision]" : "";
     const tags = model.tags?.length ? ` (${model.tags.join(", ")})` : "";
@@ -273,22 +336,27 @@ async function handleInteractiveSwitch(
   if (!selectedEntry) return;
 
   const modelKey = selectedEntry.value;
+  const model = snapshot.models[modelKey];
+  if (!model) return;
 
   if (state.activeModelKey === modelKey) {
-    ctx.ui.notify(`Already using ${config.models[modelKey].name}`, "info");
+    ctx.ui.notify(`Already using ${model.name}`, "info");
     return;
   }
 
   try {
-    ctx.ui.notify(`Switching to ${config.models[modelKey].name}...`, "info");
-    await switchModel(config, modelKey, {
+    ctx.ui.notify(`Switching to ${model.name}...`, "info");
+    await switchModel(snapshot, modelKey, {
       onStatusUpdate: (msg) => {
         ctx.ui.notify(msg, "info");
       },
     });
 
-    registerProvider(pi, config, modelKey);
-    ctx.ui.notify(`Switched to ${config.models[modelKey].name}`, "info");
+    const selected = await activateModel(pi, snapshot, modelKey, ctx);
+    ctx.ui.notify(
+      `Switched to ${model.name}${selected ? "" : " — select it via /model if needed"}`,
+      "info"
+    );
   } catch (err: any) {
     ctx.ui.notify(`Switch failed: ${err.message}`, "error");
   }
@@ -300,22 +368,32 @@ async function handleDirectSwitch(
   modelKey: string,
   ctx: any
 ): Promise<void> {
+  const snapshot = config;
   const state = getState();
+  const model = snapshot.models[modelKey];
+  if (!model) {
+    ctx.ui.notify(`Unknown model: '${modelKey}'`, "error");
+    return;
+  }
+
   if (state.activeModelKey === modelKey) {
-    ctx.ui.notify(`Already using ${config.models[modelKey].name}`, "info");
+    ctx.ui.notify(`Already using ${model.name}`, "info");
     return;
   }
 
   try {
-    ctx.ui.notify(`Switching to ${config.models[modelKey].name}...`, "info");
-    await switchModel(config, modelKey, {
+    ctx.ui.notify(`Switching to ${model.name}...`, "info");
+    await switchModel(snapshot, modelKey, {
       onStatusUpdate: (msg) => {
         ctx.ui.notify(msg, "info");
       },
     });
 
-    registerProvider(pi, config, modelKey);
-    ctx.ui.notify(`Switched to ${config.models[modelKey].name}`, "info");
+    const selected = await activateModel(pi, snapshot, modelKey, ctx);
+    ctx.ui.notify(
+      `Switched to ${model.name}${selected ? "" : " — select it via /model if needed"}`,
+      "info"
+    );
   } catch (err: any) {
     ctx.ui.notify(`Switch failed: ${err.message}`, "error");
   }
@@ -337,15 +415,25 @@ function handleList(config: SwitcherConfig, ctx: any): void {
   );
 }
 
-function handleStatus(config: SwitcherConfig, ctx: any): void {
+export function handleStatus(config: SwitcherConfig, ctx: any): void {
   const state = getState();
-  if (state.activeModelKey) {
-    const model = config.models[state.activeModelKey];
+  const model = state.activeModelKey
+    ? config.models[state.activeModelKey]
+    : undefined;
+
+  if (model) {
     ctx.ui.notify(
       `Active: ${model.name} (${model.description})\n` +
         `Context: ${model.contextWindow} tokens\n` +
         `PID: ${state.activePid ?? "unknown"}\n` +
-        `Server: http://${config.server.host}:${config.server.port}`,
+        `Server: ${formatServerUrl(config.server.host, config.server.port)}`,
+      "info"
+    );
+  } else if (state.activeModelKey || state.activePid) {
+    ctx.ui.notify(
+      `Active: ${state.activeModelKey ?? "unlisted model"} (not in current config)\n` +
+        `PID: ${state.activePid ?? "unknown"}\n` +
+        `Server: ${formatServerUrl(config.server.host, config.server.port)}`,
       "info"
     );
   } else {
@@ -353,19 +441,59 @@ function handleStatus(config: SwitcherConfig, ctx: any): void {
   }
 }
 
-function handleReload(pi: ExtensionAPI, config: SwitcherConfig, ctx: any): void {
-  const newConfig = loadConfig();
+export async function handleReload(
+  pi: ExtensionAPI,
+  ctx: any,
+  setConfig: (next: SwitcherConfig) => void
+): Promise<void> {
+  if (getState().isSwitching) {
+    ctx.ui.notify(
+      "Cannot reload config while a model switch is in progress",
+      "error"
+    );
+    return;
+  }
+
+  let newConfig: SwitcherConfig | null;
+  try {
+    newConfig = loadConfig();
+  } catch (err: any) {
+    ctx.ui.notify(`Failed to reload config: ${err.message}`, "error");
+    return;
+  }
+
   if (!newConfig) {
     ctx.ui.notify("Failed to reload config: file not found", "error");
     return;
   }
-  Object.assign(config, newConfig);
+
+  setConfig(newConfig);
   const state = getState();
-  registerProvider(pi, config, state.activeModelKey ?? config.defaultModel);
-  ctx.ui.notify(
-    `Reloaded config: ${Object.keys(newConfig.models).length} models`,
-    "info"
-  );
+  const modelCount = Object.keys(newConfig.models).length;
+
+  if (state.activeModelKey && !newConfig.models[state.activeModelKey]) {
+    const droppedKey = state.activeModelKey;
+    clearActiveModelKey();
+
+    if (newConfig.defaultModel && newConfig.models[newConfig.defaultModel]) {
+      registerProvider(pi, newConfig, newConfig.defaultModel);
+    }
+
+    ctx.ui.setStatus("llama-switch", "⚠ unlisted model running");
+    ctx.ui.notify(
+      `Reloaded config: ${modelCount} models. Active model '${droppedKey}' was removed; the current server stays running until the next /switch.`,
+      "warning"
+    );
+    return;
+  }
+
+  if (state.activeModelKey) {
+    await activateModel(pi, newConfig, state.activeModelKey, ctx);
+  } else if (newConfig.defaultModel && newConfig.models[newConfig.defaultModel]) {
+    registerProvider(pi, newConfig, newConfig.defaultModel);
+  }
+
+  ctx.ui.notify(`Reloaded config: ${modelCount} models`, "info");
 }
 
 function handleLogs(ctx: any): void {
@@ -380,22 +508,104 @@ function handleLogs(ctx: any): void {
   }
 }
 
+/**
+ * Extracts the primary model identifier from a configured command. Secondary
+ * artifacts (--mmproj, --draft, ...) are explicitly skipped so they cannot be
+ * mistaken for the main model.
+ */
+export function extractModelMatchTokens(command: string[]): string[] {
+  const tokens: string[] = [];
+
+  const servedName = findFlagValue(command, ["--served-model-name"]);
+  if (servedName) tokens.push(servedName);
+
+  // `python3 -m <module>` uses -m for the module, not the model.
+  const pythonModuleFlag =
+    command[1] === "-m" && /python/i.test(basename(command[0]));
+  const modelFlag = findFlagValue(
+    command,
+    pythonModuleFlag ? ["--model"] : ["-m", "--model"]
+  );
+  if (modelFlag) tokens.push(modelFlag);
+
+  const hfRepo = findFlagValue(command, ["--hf-repo", "-hf"]);
+  if (hfRepo) tokens.push(hfRepo);
+
+  if (tokens.length === 0) {
+    const serveIndex = command.indexOf("serve");
+    if (serveIndex !== -1) {
+      const positional = command[serveIndex + 1];
+      if (positional && !positional.startsWith("-")) {
+        tokens.push(positional);
+      }
+    }
+  }
+
+  if (tokens.length === 0) {
+    for (let i = 0; i < command.length; i++) {
+      const arg = command[i];
+      if (SECONDARY_MODEL_FLAGS.includes(arg)) {
+        i++;
+        continue;
+      }
+      if (SECONDARY_MODEL_FLAGS.some((flag) => arg.startsWith(`${flag}=`))) {
+        continue;
+      }
+      if (arg.toLowerCase().endsWith(".gguf")) {
+        tokens.push(arg);
+        break;
+      }
+    }
+  }
+
+  return tokens;
+}
+
+/**
+ * Identifies which configured model a running process serves. Models sharing a
+ * primary model file are disambiguated by secondary flags (--mmproj, --ctx-size,
+ * --max-model-len, --alias, --served-model-name).
+ */
+export function detectModelFromArgs(
+  config: SwitcherConfig,
+  procArgs: string
+): string | null {
+  let best: { key: string; score: number } | null = null;
+
+  for (const [key, model] of Object.entries(config.models)) {
+    const tokens = extractModelMatchTokens(model.command);
+    if (tokens.length === 0) continue;
+    if (!tokens.some((token) => commandLineHasToken(procArgs, token))) {
+      continue;
+    }
+
+    let score = 0;
+    for (const flag of DISTINGUISHING_FLAGS) {
+      const value = findFlagValue(model.command, [flag]);
+      if (value && commandLineHasToken(procArgs, value)) {
+        score++;
+      }
+    }
+
+    if (!best || score > best.score) {
+      best = { key, score };
+    }
+  }
+
+  return best?.key ?? null;
+}
+
 function detectModelFromPid(config: SwitcherConfig, pid: number): string | null {
   try {
     const args = execSync(`ps -p ${pid} -o args=`, {
       encoding: "utf-8",
-      timeout: 1000,
+      timeout: 3000,
     }).trim();
 
-    for (const [key, model] of Object.entries(config.models)) {
-      const ggufArg = model.command.find((arg) => arg.endsWith(".gguf"));
-      if (ggufArg && args.includes(ggufArg)) {
-        return key;
-      }
-    }
+    return detectModelFromArgs(config, args);
   } catch {
     // ps not available or other error
   }
 
-  return config.defaultModel || null;
+  return null;
 }

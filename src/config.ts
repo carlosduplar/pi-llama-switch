@@ -14,6 +14,7 @@ export interface ModelConfig {
   description: string;
   command: string[];
   env?: Record<string, string>;
+  modelId?: string;
   vision: boolean;
   contextWindow: number;
   maxTokens: number;
@@ -27,6 +28,35 @@ export interface SwitcherConfig {
 }
 
 const CONFIG_FILENAME = "model-switcher.json";
+
+/**
+ * Formats a host for use inside a URL authority. IPv6 literals must be
+ * bracketed (http://[::1]:8080), while already-bracketed hosts are left alone.
+ */
+export function formatHostForUrl(host: string): string {
+  if (host.startsWith("[") && host.endsWith("]")) {
+    return host;
+  }
+  if (host.includes(":")) {
+    return `[${host}]`;
+  }
+  return host;
+}
+
+export function formatServerUrl(
+  host: string,
+  port: number,
+  path = ""
+): string {
+  return `http://${formatHostForUrl(host)}:${port}${path}`;
+}
+
+/**
+ * node:net's socket.connect(port, host) expects an unbracketed IPv6 address.
+ */
+export function normalizeHostForSocket(host: string): string {
+  return host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+}
 
 function expandTilde(p: string): string {
   // Handle --arg=~/path pattern
@@ -77,6 +107,12 @@ function validateConfig(raw: any): SwitcherConfig {
     if (!Array.isArray(m.command) || m.command.length === 0) {
       throw new Error(`models.${key}.command must be a non-empty array`);
     }
+    if (
+      m.modelId !== undefined &&
+      (typeof m.modelId !== "string" || m.modelId.trim().length === 0)
+    ) {
+      throw new Error(`models.${key}.modelId must be a non-empty string`);
+    }
   }
 
   const server: ServerConfig = {
@@ -93,6 +129,7 @@ function validateConfig(raw: any): SwitcherConfig {
       description: model.description,
       command: expandCommand(model.command),
       env: model.env && typeof model.env === "object" ? model.env : undefined,
+      modelId: model.modelId?.trim() || undefined,
       vision: model.vision ?? false,
       contextWindow: model.contextWindow ?? 8192,
       maxTokens: model.maxTokens ?? 4096,
@@ -100,9 +137,19 @@ function validateConfig(raw: any): SwitcherConfig {
     };
   }
 
+  if (raw.defaultModel !== undefined && typeof raw.defaultModel !== "string") {
+    throw new Error("defaultModel must be a string");
+  }
+  const requestedDefault =
+    typeof raw.defaultModel === "string" ? raw.defaultModel.trim() : "";
+  const defaultModel = requestedDefault || Object.keys(models)[0] || "";
+  if (defaultModel && !models[defaultModel]) {
+    throw new Error(`defaultModel '${defaultModel}' not found in models`);
+  }
+
   return {
     server,
-    defaultModel: raw.defaultModel ?? Object.keys(models)[0] ?? "",
+    defaultModel,
     models,
   };
 }

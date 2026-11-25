@@ -99,6 +99,7 @@ The extension should also work with vLLM. See `examples/model-switcher-vllm.json
       "command": [
         "python3", "-m", "vllm.entrypoints.openai.api_server",
         "--model", "~/models/qwen/Qwen3.6-35B-A3B",
+        "--served-model-name", "qwen",
         "--tensor-parallel-size", "1",
         "--gpu-memory-utilization", "0.9",
         "--max-model-len", "8192",
@@ -129,6 +130,7 @@ The extension should also work with vLLM. See `examples/model-switcher-vllm.json
 | `models.<key>.name` | yes | Display name |
 | `models.<key>.description` | yes | Short description |
 | `models.<key>.command` | yes | Array-style command (no shell parsing needed) |
+| `models.<key>.modelId` | no | Overrides the model ID sent in OpenAI API requests when the backend serves a different ID (e.g. `org/model-name`). Defaults to `--served-model-name`, `--alias`, the vLLM `--model`/`serve` value, or the model key |
 | `models.<key>.vision` | no | Whether model supports images (default: false) |
 | `models.<key>.contextWindow` | no | Max context tokens for Pi (default: 8192) |
 | `models.<key>.maxTokens` | no | Max output tokens for Pi (default: 4096) |
